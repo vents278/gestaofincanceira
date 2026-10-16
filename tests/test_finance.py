@@ -1,10 +1,6 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
-import jwt
-
-from app.auth import secret
-
 TODAY = date.today().isoformat()
 MONTH = TODAY[:7]
 
@@ -33,7 +29,7 @@ def test_auth_and_group_creation(client):
         "family_name": "Família",
     }
     assert client.post("/api/auth/register", json=payload).status_code == 201
-    assert client.post("/api/auth/register", json=payload).status_code == 409
+    assert client.post("/api/auth/register", json=payload).status_code == 400
     assert (
         client.post(
             "/api/auth/login", json={"email": payload["email"], "password": "wrong"}
@@ -94,10 +90,10 @@ def test_custom_split_and_cancel(client, household):
     assert result.status_code == 201
     d = client.get("/api/dashboard", params={"month": MONTH}).json()
     assert Decimal(d["expense"]) == Decimal("1000.01")
-    assert [Decimal(s["net"]) for s in d["settlement"]] == [
-        Decimal("600.01"),
-        Decimal("-600.01"),
-    ]
+    assert {s["user_id"]: Decimal(s["net"]) for s in d["settlement"]} == {
+        h["rita"]: Decimal("600.01"),
+        h["jean"]: Decimal("-600.01"),
+    }
     assert client.delete("/api/entries/" + str(result.json()["id"])).status_code == 204
     assert client.get("/api/entries").json() == []
     assert Decimal(client.get("/api/accounts").json()[0]["visible_balance"]) == 100
@@ -135,7 +131,7 @@ def test_private_records_do_not_leak_into_aggregates(client, household):
     assert result.status_code == 201
     login = client.post(
         "/api/auth/login",
-        json={"email": "jean@example.com", "password": "another-test-password"},
+        json={"email": "jean@example.com", "password": "strong-test-password"},
     ).json()
     client.headers["Authorization"] = "Bearer " + login["access_token"]
     assert client.get("/api/entries").json() == []
@@ -163,6 +159,7 @@ def test_group_isolation_and_foreign_keys(client, household):
         },
     ).json()
     client.headers["Authorization"] = "Bearer " + other["access_token"]
+    assert client.get("/api/me").status_code == 200
     assert client.get("/api/entries").json() == []
     assert client.get("/api/accounts").json() == []
     assert client.delete("/api/entries/" + str(result["id"])).status_code == 404
@@ -174,7 +171,7 @@ def test_member_permissions(client, household):
     result = client.post("/api/entries", json=entry(h)).json()
     login = client.post(
         "/api/auth/login",
-        json={"email": "jean@example.com", "password": "another-test-password"},
+        json={"email": "jean@example.com", "password": "strong-test-password"},
     ).json()
     client.headers["Authorization"] = "Bearer " + login["access_token"]
     assert client.post("/api/accounts", json={"name": "Inválida"}).status_code == 403
@@ -216,10 +213,11 @@ def test_validation_and_category_history(client, household):
     assert client.get("/api/entries?month=2026-99").status_code == 422
 
 
-def test_expired_token(client):
-    token = jwt.encode({"sub": "1", "exp": 1}, secret(), algorithm="HS256")
+def test_invalid_token(client):
     assert (
-        client.get("/api/me", headers={"Authorization": "Bearer " + token}).status_code
+        client.get(
+            "/api/me", headers={"Authorization": "Bearer forged-or-expired"}
+        ).status_code
         == 401
     )
 

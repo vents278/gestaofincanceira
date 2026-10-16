@@ -1,50 +1,67 @@
-import os
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from uuid import UUID
 
-import jwt
+import httpx
 from fastapi import Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer
-from pwdlib import PasswordHash
-from sqlalchemy.orm import Session
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .database import get_db
-from .models import User
+from .config import settings
 
-passwords = PasswordHash.recommended()
-bearer = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+bearer = HTTPBearer(auto_error=False)
 
 
-def secret():
-    value = os.getenv("JWT_SECRET", "")
-    if len(value) < 32:
-        raise RuntimeError(
-            "Configure JWT_SECRET com pelo menos 32 caracteres aleatórios"
-        )
-    return value
+@dataclass
+class Identity:
+    id: UUID
+    email: str
+    metadata: dict
+    access_token: str
 
 
-def token(user):
-    return jwt.encode(
-        {"sub": str(user.id), "exp": datetime.now(timezone.utc) + timedelta(hours=8)},
-        secret(),
-        algorithm="HS256",
-    )
-
-
-def current_user(raw: str = Depends(bearer), db: Session = Depends(get_db)):
+def auth_request(method, path, *, token=None, data=None):
+    config = settings()
+    headers = {"apikey": config.publishable_key}
+    if token:
+        headers["Authorization"] = "Bearer " + token
     try:
-        data = jwt.decode(
-            raw, secret(), algorithms=["HS256"], options={"require": ["exp", "sub"]}
+        response = httpx.request(
+            method,
+            config.supabase_url + "/auth/v1/" + path,
+            headers=headers,
+            json=data,
+            timeout=15,
         )
-        user = db.get(User, int(data["sub"]))
-    except (jwt.PyJWTError, ValueError, TypeError):
-        raise HTTPException(401, "Sessão inválida ou expirada")
-    if not user or not user.active:
-        raise HTTPException(401, "Usuário indisponível")
-    return user
+    except httpx.HTTPError:
+        raise HTTPException(503, "Supabase Auth indisponível") from None
+    if not response.is_success:
+        if response.status_code == 429:
+            raise HTTPException(
+                429, "Muitas tentativas. Aguarde antes de tentar novamente."
+            )
+        if response.status_code >= 500:
+            raise HTTPException(503, "Supabase Auth indisponível")
+        raise HTTPException(
+            401 if path.startswith(("token", "user", "logout")) else 400,
+            "Autenticação não concluída. Verifique os dados e a confirmação do e-mail.",
+        )
+    return response.json() if response.content else {}
 
 
-def admin(user: User = Depends(current_user)):
-    if user.role != "admin":
-        raise HTTPException(403, "Acesso restrito ao administrador")
-    return user
+def verify_access(raw):
+    # Auth /user validates signature, issuer, expiry and session with the project.
+    # Never trust jwt.decode(..., verify_signature=False) or browser-supplied IDs.
+    data = auth_request("GET", "user", token=raw)
+    try:
+        return Identity(
+            UUID(data["id"]), data["email"], data.get("user_metadata") or {}, raw
+        )
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(401, "Identidade Supabase inválida") from None
+
+
+def current_identity(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+):
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(401, "Autenticação necessária")
+    return verify_access(credentials.credentials)

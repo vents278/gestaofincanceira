@@ -5,3 +5,7 @@ __pycache__/
 *.db
 *.db-*
 .local/
+
+.ruff_cache/
+*.pem
+*.key

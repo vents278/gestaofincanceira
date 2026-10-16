@@ -1,0 +1,5 @@
+-r requirements.txt
+pgserver==0.1.4
+fasteners==0.20
+platformdirs==4.13.3
+psutil==7.2.2

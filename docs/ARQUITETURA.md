@@ -1,73 +1,88 @@
-# Arquitetura e planejamento
+# Arquitetura Supabase · v0.2
 
-## Visão completa
-
-O navegador serve HTML e CSS e usa JavaScript/Fetch para chamar uma API na mesma origem. A API autentica o JWT, valida o corpo com Pydantic, verifica permissões e executa regras de negócio com `Decimal`. O SQLAlchemy persiste os registros em SQLite no desenvolvimento; Alembic versiona o esquema. A mesma estrutura está preparada para PostgreSQL por `DATABASE_URL`.
+## Fluxo
 
 ```text
-Navegador (HTML/CSS/JS + Chart.js)
-        │ JSON + Authorization: Bearer
-        ▼
-FastAPI → autenticação → rotas → serviços financeiros
-                                   │ transação SQLAlchemy
-                                   ▼
-                             SQLite / PostgreSQL
+HTML / CSS / JavaScript puro + Chart.js
+         │ Fetch, token de acesso em memória
+         ▼
+FastAPI ────────── Supabase Auth (signup/login/user/refresh/recover/logout)
+  │ identidade verificada     │ refresh em cookie HttpOnly
+  ├─ SQLAlchemy + psycopg ────┴─ Supabase PostgreSQL
+  │   SET LOCAL ROLE authenticated + request.jwt.claims
+  │   RLS + chaves estrangeiras + transações + triggers de auditoria
+  └─ JWT do próprio usuário ── Supabase Storage (bucket privado)
 ```
 
-### Pastas
+O frontend não recebe senha PostgreSQL ou chave de serviço. O FastAPI consulta `/auth/v1/user` para validar tokens; não assina JWTs próprios, não armazena hashes e não confia em IDs/papéis enviados no corpo ou em claims decodificadas sem validação. Papéis vêm de `integrantes_grupo` no banco.
 
-```text
-app/
-  main.py             aplicação, página, arquivos estáticos e headers de segurança
-  database.py         engine, sessões e ativação de foreign keys SQLite
-  models.py           entidades e restrições relacionais
-  schemas.py          contratos de entrada e validação
-  auth.py             hash, emissão/verificação JWT e dependências de acesso
-  routers/api.py      endpoints autenticados e operações transacionais
-  services/finance.py regras de visibilidade, vínculos e divisão
-  static/
-    index.html        telas, formulários e diálogos
-    style.css         layout responsivo e temas
-    app.js            estado da interface e comunicação Fetch
-    vendor/           Chart.js 4.4.8 e sua licença MIT
-migrations/           evolução do esquema Alembic
-scripts/              instalação e inicialização repetíveis
-tests/                integração da API e smoke test opcional de navegador
-docs/                 especificação, arquitetura e guia didático
-```
+Toda transação de `FinanceSession`, inclusive uma nova transação após `commit`, assume `authenticated` e configura o UUID autenticado via `set_config(..., true)`. `SET LOCAL` e a configuração local expiram ao final da transação; o pool não carrega identidade de uma requisição para outra. As queries continuam filtradas no backend e o banco aplica as políticas independentemente da API.
 
-## Modelo inicial implementado
+## Pastas e responsabilidades
 
-- `grupos_familiares`: nome; um grupo tem usuários, contas e categorias.
-- `usuarios`: grupo, nome, e-mail único, hash, papel, status, data de cadastro.
-- `contas_bancarias`: grupo, nome e saldo inicial NUMERIC(14,2).
-- `categorias`: grupo, nome e tipo; combinação única por grupo.
-- `lancamentos`: grupo, responsável, pagador, conta, categoria, descrição, valor NUMERIC(14,2), tipo, vencimento, liquidação, compartilhamento, privacidade, modalidade e percentual de divisão, observações e cancelamento.
-- `auditoria`: grupo, ator, ação, identificador e data. Registra criação de conta e criação, edição e cancelamento de lançamento; não contém senha/token. Não é ainda um histórico completo de versões ou uma trilha imutável externa.
+| Caminho | Responsabilidade |
+|---|---|
+| `app/config.py` | Variáveis obrigatórias, proibição de chave service_role, PostgreSQL e TLS remoto |
+| `app/auth.py` | Cliente HTTP Auth, validação remota da identidade |
+| `app/dependencies.py` | Perfil, vínculo familiar e permissão administrativa |
+| `app/database.py` | Engine e contexto RLS por transação |
+| `app/models.py` | Mapeamento ORM do MVP, sem criar tabelas automaticamente |
+| `app/schemas.py` | Entradas Pydantic, UUID e Decimal |
+| `app/routers/auth.py` | Cadastro, login, refresh, callback, recuperação, senha e logout |
+| `app/routers/api.py` | Contas, categorias, receitas/despesas, dashboard, convite e acerto |
+| `app/routers/storage.py` | Upload limitado, metadados e download protegido |
+| `app/services/finance.py` | Regras de visibilidade, vínculos, proporção e divisão |
+| `app/static/` | Interface, Fetch, gráficos e temas; sem dependência de SDK Supabase |
+| `supabase/migrations/` | SQL oficial versionado: DDL, relações, RLS, funções e Storage |
+| `scripts/migrate.py` | Aplicação transacional ou exportação para SQL Editor, com checksums |
+| `tests/` | PostgreSQL real, testes SQL adversariais, Auth/Storage HTTP simulado e navegador |
 
-Receitas e despesas usam a mesma tabela porque compartilham estrutura e ciclo de liquidação. A API distingue os tipos e valida a categoria. A participação do responsável e o restante do segundo integrante ficam no próprio lançamento: o MVP não exige tabelas separadas de receitas, despesas e divisões. O grupo diretamente no usuário expressa o vínculo único nesta etapa; múltiplos grupos exigirão `integrantes_grupo`.
+## Modelo relacional
 
-Chaves estrangeiras impedem referências inexistentes; a camada de serviço verifica que as referências pertencem ao mesmo grupo. O cancelamento mantém referências e histórico. Operações de lançamento e auditoria usam a mesma sessão e commit, de forma atômica. Valores são `Decimal` no Python, `NUMERIC` no banco e strings no JSON para preservar centavos na transmissão. SQLite tem afinidade numérica, sem todas as garantias de precisão do NUMERIC do PostgreSQL; para produção e escalas maiores, usar PostgreSQL e testar seus limites.
+Todos os identificadores primários são UUID, gerados com `gen_random_uuid()` ou `uuid4`. Valores monetários são `NUMERIC(15,2)` no banco, `Decimal` no Python e strings decimais no JSON.
 
-## Regras e limites do MVP
+- `usuarios.id` referencia `auth.users.id`. Nome/e-mail do perfil são inicializados da identidade do Auth; nenhuma senha fica no esquema público.
+- `grupos_familiares` referencia seu criador; `integrantes_grupo` liga usuário ao grupo, papel e status. Um usuário pertence a um grupo neste MVP; a criação e entrada usam funções controladas, não inserções públicas.
+- `contas_bancarias`: grupo, nome e saldo inicial.
+- `categorias`: grupo, nome e tipo; combinação única.
+- `receitas` e `despesas`: grupo, responsável, pagador, conta, categoria, valor, descrição, vencimento, liquidação, privacidade, cancelamento, observações e parâmetros de divisão. O modelo abstrato `Entry` compartilha campos no Python; os dados ficam em tabelas distintas.
+- `cartoes_credito`: titular, conta de pagamento, limite, fechamento e vencimento.
+- `faturas`: cartão, vencimento e estado.
+- `parcelas`: despesa, fatura, número, valor e vencimento; parcela única por despesa/número.
+- `metas_financeiras`: titular, valor-alvo, acumulado, prazo e privacidade.
+- `orcamentos`: titular, categoria, mês, limite e privacidade.
+- `anexos`: despesa, uploader, caminho privado, nome e tipo do arquivo.
+- `auditoria`: usuário, grupo, tabela/operação, registro e data. Inserida por triggers, não editável pela aplicação. É trilha de ações; ainda não guarda versões completas before/after.
+- `private.convites`: hash do código, validade e uso. Não é exposta pela Data API.
+- `private.schema_migrations`: versão, checksum e data de aplicação.
 
-1. Sem liquidação, o registro não altera o saldo.
-2. Lançamento liquidado entra uma vez no saldo; editar substitui o dado usado no cálculo.
-3. Despesa compartilhada é uma despesa única; divisão não cria despesas adicionais.
-4. Quem paga recebe crédito no acerto; cada pessoa assume sua participação. Saldo positivo representa valor a receber.
-5. Um centavo residual vai para o segundo integrante; a soma das parcelas permanece igual ao gasto.
-6. Apenas o proprietário vê um lançamento privado. Administrador não ignora essa regra.
-7. Integrante edita seus lançamentos; administrador gerencia registros visíveis, contas, categorias e o segundo integrante.
-8. Não há transferência, pagamento de fatura ou cartão nesta etapa; esses eventos terão entidades próprias para não inflar receitas/despesas.
-9. O saldo é derivado do histórico, não de incrementos mutáveis a cada requisição.
+Chaves estrangeiras compostas incluem `family_id` nas referências financeiras, impedindo cruzar grupos mesmo com UUID válido. Categoria inclui `kind` no vínculo para impedir usar categoria de receita numa despesa. Os índices cobrem grupo, usuário, vencimento/mês e categoria; referências frequentes de conta, despesa e cartão também são indexadas.
 
-## Sequência de desenvolvimento
+## Políticas de acesso
 
-| Etapa | Entrega | Entidades futuras |
+| Recurso | Consulta | Escrita |
 |---|---|---|
-| 1 — atual | Login, grupo, contas, receitas/despesas, categorias, dashboard e divisão | Refinar convites, autorização, cadastro e histórico |
-| 2 | Cartões, parcelas, recorrência, orçamento, calendário, contas a pagar | cartoes_credito, compras_cartao, parcelas_cartao, faturas, pagamentos_fatura, recorrencias, orcamentos, transferencias |
-| 3 | Metas, dívidas, projeções, alertas, relatórios | metas_financeiras, contribuicoes_metas, dividas, parcelas_dividas, notificacoes |
-| 4 | Importação, conciliação, exportação, backup, implantação e integrações | subcategorias, anexos protegidos, vínculos de integração e rotinas operacionais |
+| Perfis e integrantes | Próprio usuário e integrantes ativos do grupo | Apenas rotinas controladas de bootstrap/convite |
+| Grupos | Integrantes ativos | Criação pela função autenticada |
+| Contas, categorias, cartões e faturas | Integrantes ativos | Administrador do grupo |
+| Receitas, despesas, metas e orçamentos | Registros visíveis do grupo; privados só pelo dono | Próprio dono ou administrador, preservando privacidade |
+| Parcelas | Exige acesso à despesa vinculada | Administrador com acesso à despesa |
+| Comprovantes | Exige acesso à despesa | Upload por dono/admin; objeto com prefixo do uploader |
+| Auditoria | Ações do próprio ator no grupo ativo | Somente triggers no banco |
 
-Cada evolução exige migração explícita e testes das invariantes financeiras. Pagamentos de fatura e transferências deverão movimentar caixa sem gerar novas despesas de consumo. Recorrências deverão possuir uma chave única por origem/período para impedir duplicação.
+Todas as tabelas financeiras públicas têm RLS habilitado e nenhum acesso de `anon`. Receitas/despesas não têm DELETE para `authenticated`: o cancelamento é UPDATE e mantém histórico. Inserções e updates verificam tanto papel/grupo como privacidade. Funções `SECURITY DEFINER` têm `search_path` fixo e permissões limitadas. Os helpers de vínculo evitam recursão de políticas; o usuário não pode editar sua própria role. RLS não restringe o dono/superusuário: por isso o runtime sempre reduz o papel antes das consultas.
+
+## Integridade financeira mantida
+
+Pendências não entram no saldo. Liquidação entra uma única vez; editar recalcula e cancelar remove o impacto. Compartilhadas não são duplicadas: o acerto calcula participações e crédito do pagador sobre a mesma despesa. O percentual proporcional é uma fotografia das receitas visíveis no mês e pode ser recalculado ao editar. Centavos residuais vão para a segunda pessoa.
+
+Saldos/indicadores respeitam privacidade, podendo diferir do extrato real. As telas mensais usam o vencimento, não fluxo de caixa por liquidação. Não há automação de parcelas, recorrências, pagamento de faturas ou transferências nesta etapa; suas regras serão testadas antes de ativar os próximos módulos.
+
+## Etapas
+
+1. **Atual:** infraestrutura Supabase e MVP preservado, com Auth, convites, RLS e comprovantes. Validar implantação hospedada após fornecer configuração.
+2. **Gestão:** telas/regras para cartões, parcelas, faturas, recorrências, orçamento e calendário. Transferência/fatura não devem virar nova receita/despesa de consumo.
+3. **Planejamento:** metas, dívidas, projeções, alertas e relatórios.
+4. **Evolução:** importação, conciliação, exportação, backup/restauração e integrações.
+
+A estrutura SQL de módulos futuros é fundação, não autorização para gerar lançamentos financeiros automaticamente. Realtime será introduzido apenas quando houver fluxo que precise de atualização entre sessões, com políticas específicas e sem expor linhas antigas privadas.

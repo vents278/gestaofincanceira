@@ -1,16 +1,18 @@
 from datetime import date
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..auth import admin, current_user, passwords, token
 from ..database import get_db
-from ..models import Account, Audit, Category, Entry, Family, User
-from ..schemas import AccountIn, CategoryIn, EntryIn, Login, Member, Register
+from ..dependencies import UserContext as User
+from ..dependencies import admin, current_user, family_members
+from ..models import Account, Category, Entry, Expense, Family, Income
+from ..schemas import AccountIn, CategoryIn, EntryIn
 from ..services.finance import ZERO, related, splits, validate_entry, visible
 
 router = APIRouter(prefix="/api")
@@ -34,64 +36,6 @@ def commit(db):
         raise HTTPException(409, "Já existe um registro com esses dados")
 
 
-def audit(db, user, action, id):
-    db.add(
-        Audit(family_id=user.family_id, user_id=user.id, action=action, record_id=id)
-    )
-
-
-@router.post("/auth/register", status_code=201)
-def register(data: Register, db: Session = Depends(get_db)):
-    if db.scalar(select(User).where(User.email == str(data.email).lower())):
-        raise HTTPException(409, "E-mail já cadastrado")
-    family = Family(name=data.family_name)
-    db.add(family)
-    db.flush()
-    user = User(
-        family_id=family.id,
-        name=data.name,
-        email=str(data.email).lower(),
-        password_hash=passwords.hash(data.password),
-        role="admin",
-    )
-    db.add(user)
-    for kind, names in {
-        "income": ["Salário", "Trabalho extra", "Rendimentos", "Outras receitas"],
-        "expense": [
-            "Moradia",
-            "Supermercado",
-            "Transporte",
-            "Saúde",
-            "Lazer",
-            "Outros",
-        ],
-    }.items():
-        for name in names:
-            db.add(Category(family_id=family.id, name=name, kind=kind))
-    commit(db)
-    return {
-        "access_token": token(user),
-        "token_type": "bearer",
-        "user": public_user(user),
-    }
-
-
-@router.post("/auth/login")
-def login(data: Login, db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == str(data.email).lower()))
-    if (
-        not user
-        or not user.active
-        or not passwords.verify(data.password, user.password_hash)
-    ):
-        raise HTTPException(401, "E-mail ou senha inválidos")
-    return {
-        "access_token": token(user),
-        "token_type": "bearer",
-        "user": public_user(user),
-    }
-
-
 @router.get("/me")
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     return {**public_user(user), "family_name": db.get(Family, user.family_id).name}
@@ -99,28 +43,14 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
 
 @router.get("/members")
 def members(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return [
-        public_user(u)
-        for u in db.scalars(select(User).where(User.family_id == user.family_id))
-    ]
+    return [public_user(u) for u in family_members(db, user.family_id)]
 
 
-@router.post("/members", status_code=201)
-def add_member(
-    data: Member, user: User = Depends(admin), db: Session = Depends(get_db)
-):
-    if len(list(db.scalars(select(User).where(User.family_id == user.family_id)))) >= 2:
-        raise HTTPException(422, "Este MVP aceita dois integrantes por grupo")
-    other = User(
-        family_id=user.family_id,
-        name=data.name,
-        email=str(data.email).lower(),
-        password_hash=passwords.hash(data.password),
-        role="member",
-    )
-    db.add(other)
+@router.post("/members/invitations", status_code=201)
+def invite(user: User = Depends(admin), db: Session = Depends(get_db)):
+    code = db.scalar(text("select public.create_family_invitation()"))
     commit(db)
-    return public_user(other)
+    return {"invitation_code": code, "expires_in_hours": 48}
 
 
 @router.get("/accounts")
@@ -154,7 +84,6 @@ def add_account(
     obj = Account(**data.model_dump(), family_id=user.family_id)
     db.add(obj)
     db.flush()
-    audit(db, user, "account.create", obj.id)
     commit(db)
     return {"id": obj.id, "name": obj.name}
 
@@ -181,14 +110,15 @@ def add_category(
 
 @router.put("/categories/{id}")
 def edit_category(
-    id: int,
+    id: UUID,
     data: CategoryIn,
     user: User = Depends(admin),
     db: Session = Depends(get_db),
 ):
     obj = related(db, Category, id, user.family_id)
-    if obj.kind != data.kind and db.scalar(
-        select(Entry.id).where(Entry.category_id == id).limit(1)
+    if obj.kind != data.kind and (
+        db.scalar(select(Income.id).where(Income.category_id == id).limit(1))
+        or db.scalar(select(Expense.id).where(Expense.category_id == id).limit(1))
     ):
         raise HTTPException(409, "Categoria em uso não pode mudar de tipo")
     obj.name = data.name
@@ -199,10 +129,12 @@ def edit_category(
 
 @router.delete("/categories/{id}", status_code=204)
 def delete_category(
-    id: int, user: User = Depends(admin), db: Session = Depends(get_db)
+    id: UUID, user: User = Depends(admin), db: Session = Depends(get_db)
 ):
     obj = related(db, Category, id, user.family_id)
-    if db.scalar(select(Entry.id).where(Entry.category_id == id).limit(1)):
+    if db.scalar(
+        select(Income.id).where(Income.category_id == id).limit(1)
+    ) or db.scalar(select(Expense.id).where(Expense.category_id == id).limit(1)):
         raise HTTPException(409, "Categoria possui histórico financeiro")
     db.delete(obj)
     commit(db)
@@ -250,9 +182,9 @@ def filtered(db, user, month, owner_id, category_id, account_id):
 @router.get("/entries")
 def entries(
     month: str | None = Query(None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
-    owner_id: int | None = None,
-    category_id: int | None = None,
-    account_id: int | None = None,
+    owner_id: UUID | None = None,
+    category_id: UUID | None = None,
+    account_id: UUID | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
@@ -271,10 +203,10 @@ def add_entry(
     data: EntryIn, user: User = Depends(current_user), db: Session = Depends(get_db)
 ):
     validate_entry(db, user, data)
-    obj = Entry(**data.model_dump(), family_id=user.family_id)
+    model = Income if data.kind == "income" else Expense
+    obj = model(**data.model_dump(), family_id=user.family_id)
     db.add(obj)
     db.flush()
-    audit(db, user, "entry.create", obj.id)
     commit(db)
     return serialize(obj)
 
@@ -290,27 +222,27 @@ def editable(db, user, id):
 
 @router.put("/entries/{id}")
 def edit_entry(
-    id: int,
+    id: UUID,
     data: EntryIn,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     obj = editable(db, user, id)
+    if obj.kind != data.kind:
+        raise HTTPException(409, "Para mudar o tipo, cancele o lançamento e crie outro")
     validate_entry(db, user, data)
     for key, value in data.model_dump().items():
         setattr(obj, key, value)
-    audit(db, user, "entry.update", id)
     commit(db)
     return serialize(obj)
 
 
 @router.delete("/entries/{id}", status_code=204)
 def cancel_entry(
-    id: int, user: User = Depends(current_user), db: Session = Depends(get_db)
+    id: UUID, user: User = Depends(current_user), db: Session = Depends(get_db)
 ):
     obj = editable(db, user, id)
     obj.cancelled = True
-    audit(db, user, "entry.cancel", id)
     commit(db)
     return Response(status_code=204)
 
@@ -321,9 +253,9 @@ def dashboard(
         default_factory=lambda: date.today().strftime("%Y-%m"),
         pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
     ),
-    owner_id: int | None = None,
-    category_id: int | None = None,
-    account_id: int | None = None,
+    owner_id: UUID | None = None,
+    category_id: UUID | None = None,
+    account_id: UUID | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
@@ -340,9 +272,7 @@ def dashboard(
     pending = sum(
         (e.amount for e in selected if e.kind == "expense" and not e.settled_date), ZERO
     )
-    family_members = list(
-        db.scalars(select(User).where(User.family_id == user.family_id))
-    )
+    group_members = family_members(db, user.family_id)
     by_category = {}
     for e in selected:
         if e.kind == "expense":
@@ -379,9 +309,9 @@ def dashboard(
                         ZERO,
                     ),
                 }
-                for m in family_members
+                for m in group_members
             ],
-            "settlement": splits(selected, family_members),
+            "settlement": splits(selected, group_members),
             "overdue": sum(
                 1
                 for e in all_entries

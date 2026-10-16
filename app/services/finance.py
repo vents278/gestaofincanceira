@@ -3,7 +3,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 
-from ..models import Account, Category, Entry, User
+from ..dependencies import family_members
+from ..models import Account, Category, Entry, Expense, Income
 
 ZERO = Decimal("0.00")
 
@@ -13,19 +14,26 @@ def money(value):
 
 
 def visible(db, user):
-    return list(
-        db.scalars(
-            select(Entry).where(
-                Entry.family_id == user.family_id,
-                Entry.cancelled.is_(False),
-                or_(Entry.private.is_(False), Entry.owner_id == user.id),
+    result = []
+    for model in (Income, Expense):
+        result.extend(
+            db.scalars(
+                select(model).where(
+                    model.family_id == user.family_id,
+                    model.cancelled.is_(False),
+                    or_(model.private.is_(False), model.owner_id == user.id),
+                )
             )
         )
-    )
+    return result
 
 
 def related(db, model, id, family):
-    obj = db.get(model, id)
+    obj = (
+        (db.get(Expense, id) or db.get(Income, id))
+        if model is Entry
+        else db.get(model, id)
+    )
     if not obj or obj.family_id != family:
         raise HTTPException(404, "Registro não encontrado neste grupo")
     return obj
@@ -33,12 +41,15 @@ def related(db, model, id, family):
 
 def validate_entry(db, user, data):
     for model, id in [
-        (User, data.owner_id),
-        (User, data.payer_id),
         (Account, data.account_id),
         (Category, data.category_id),
     ]:
         related(db, model, id, user.family_id)
+    members = family_members(db, user.family_id)
+    if data.owner_id not in [m.id for m in members] or data.payer_id not in [
+        m.id for m in members
+    ]:
+        raise HTTPException(404, "Integrante não encontrado neste grupo")
     if user.role != "admin" and data.owner_id != user.id:
         raise HTTPException(403, "Integrantes só registram seus próprios lançamentos")
     if data.private and data.owner_id != user.id:
@@ -48,13 +59,6 @@ def validate_entry(db, user, data):
     if related(db, Category, data.category_id, user.family_id).kind != data.kind:
         raise HTTPException(422, "Categoria incompatível com lançamento")
     if data.shared:
-        members = list(
-            db.scalars(
-                select(User).where(
-                    User.family_id == user.family_id, User.active.is_(True)
-                )
-            )
-        )
         if len(members) != 2:
             raise HTTPException(422, "Divisão exige exatamente dois integrantes ativos")
         if data.split_mode == "equal":

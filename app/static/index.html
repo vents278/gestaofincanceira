@@ -1,16 +1,389 @@
 <!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rita & Jean Finance</title><link rel="stylesheet" href="/static/style.css"><script defer src="/static/vendor/chart.umd.js"></script><script defer src="/static/app.js"></script></head>
-<body><div id="toast" role="status" aria-live="polite"></div>
-<section id="auth" class="auth"><div class="welcome"><span class="brand-icon">R&J</span><p class="eyebrow">DINHEIRO COM PROPÓSITO</p><h1>Dois sonhos.<br>Um futuro juntos.</h1><p>Um espaço para cuidar das contas, dividir responsabilidades e construir seus próximos passos.</p><div class="welcome-foot">RITA & JEAN <span>FINANCE</span></div></div><div class="auth-panel"><p class="eyebrow">BEM-VINDOS AO SEU NOVO COMEÇO</p><h2 id="auth-title">Vamos organizar a vida?</h2><p>Entre para acompanhar suas finanças.</p><form id="auth-form"><div id="register-fields" hidden><label>Seu nome<input name="name" autocomplete="name" maxlength="120"></label><label>Nome do grupo familiar<input name="family_name" placeholder="Rita & Jean" maxlength="120"></label></div><label>E-mail<input name="email" type="email" autocomplete="username" required></label><label>Senha<input name="password" type="password" autocomplete="current-password" minlength="10" maxlength="128" required></label><button class="primary" type="submit" id="auth-submit">Entrar na minha conta →</button></form><button id="toggle-auth" class="text-button">Primeiro acesso? Criar meu grupo</button><small>A senha deve ter pelo menos 10 caracteres.</small></div></section>
-<div id="app" hidden><aside id="sidebar"><a class="logo" href="/">R<span>&</span>J <small>FINANCE</small></a><p class="side-label">SEU ESPAÇO FINANCEIRO</p><nav><button data-page="dashboard" class="active">◫ <span>Visão geral</span></button><button data-page="income">↗ <span>Receitas</span></button><button data-page="expense">↙ <span>Despesas</span></button><button data-page="accounts">▣ <span>Contas bancárias</span></button><button data-page="split">⇄ <span>Divisão do casal</span></button><button data-page="settings">⚙ <span>Configurações</span></button></nav><div class="side-bottom"><p>Pequenos passos.<br><strong>Grandes conquistas.</strong></p><button id="theme">◐ Alterar tema</button><button id="logout">↪ Sair da conta</button></div></aside>
-<main><header><div><button id="menu" aria-label="Abrir menu">☰</button><span id="family-label">Seu grupo familiar</span></div><div class="profile"><span id="user-name"></span><span id="avatar"></span></div></header><div class="content"><div class="page-heading"><div><p class="eyebrow">RITA & JEAN FINANCE</p><h1 id="page-title">Sua vida financeira, em sintonia.</h1><p id="page-subtitle">Cada escolha de hoje aproxima vocês do amanhã.</p></div><button id="new-entry" class="primary">+ Novo lançamento</button></div>
-<div id="filters" class="filters"><label>Mês<input type="month" id="month"></label><label>Integrante<select id="filter-owner"><option value="">Todos</option></select></label><label>Categoria<select id="filter-category"><option value="">Todas</option></select></label><label>Conta<select id="filter-account"><option value="">Todas</option></select></label></div>
-<section id="dashboard-page"><div id="stats" class="stats"></div><div class="chart-grid"><article class="panel"><div class="panel-title"><h2>O equilíbrio do mês</h2><span>Receitas × despesas</span></div><div class="chart"><canvas id="flow-chart" aria-label="Receitas e despesas do mês" role="img"></canvas></div></article><article class="panel"><div class="panel-title"><h2>Para onde vai o dinheiro?</h2><span>Por categoria</span></div><div class="chart"><canvas id="category-chart" aria-label="Despesas por categoria" role="img"></canvas><p id="empty-chart" hidden>As despesas aparecerão aqui.</p></div></article></div><article class="panel"><div class="panel-title"><h2>Movimentações recentes</h2><button class="text-button" data-page="expense">Ver despesas →</button></div><div id="recent"></div></article><p class="privacy-note" id="visibility"></p></section>
-<section id="entries-page" hidden><article class="panel"><label>Pesquisar descrição<input id="search" type="search" placeholder="Ex.: supermercado"></label><div id="entry-table"></div></article></section>
-<section id="accounts-page" hidden><div class="section-heading"><h2>Suas contas</h2><button id="new-account" class="primary">+ Adicionar conta</button></div><div id="account-list" class="stats"></div><p class="privacy-note">Saldos visíveis incluem saldo inicial e lançamentos liquidados acessíveis a você. Registros privados do outro integrante são excluídos.</p></section>
-<section id="split-page" hidden><article class="panel"><h2>Uma divisão justa para os dois</h2><p>O acerto do mês considera apenas despesas compartilhadas pagas. Valor positivo: a receber. Negativo: a devolver.</p><div id="settlement" class="stats"></div><p>As divisões podem ser iguais, personalizadas ou proporcionais às receitas cadastradas no mês. O percentual é salvo no lançamento e não muda automaticamente após novas receitas.</p></article></section>
-<section id="settings-page" hidden><div class="chart-grid"><article class="panel"><h2>Nosso grupo</h2><div id="members"></div><form id="member-form"><h3>Adicionar segundo integrante</h3><label>Nome<input name="name" required minlength="2"></label><label>E-mail<input name="email" type="email" required></label><label>Senha inicial<input name="password" type="password" minlength="10" maxlength="128" required></label><button class="primary">Adicionar integrante</button></form><p class="privacy-note">Nesta etapa, o administrador cadastra o segundo integrante. Convites e redefinição de senha estão previstos para evolução.</p></article><article class="panel"><h2>Categorias</h2><form id="category-form"><label>Nome<input name="name" required minlength="2" maxlength="120"></label><label>Tipo<select name="kind"><option value="expense">Despesa</option><option value="income">Receita</option></select></label><button class="primary">Criar categoria</button></form><div id="category-list"></div></article></div></section>
-<footer>Planejar juntos faz toda a diferença. <span>MVP · v0.1</span></footer></div></main></div>
-<dialog id="entry-dialog"><form id="entry-form"><div class="panel-title"><h2 id="entry-title">Novo lançamento</h2><button type="button" data-close="entry-dialog" aria-label="Fechar">✕</button></div><div class="form-grid"><label>Tipo<select name="kind"><option value="expense">Despesa</option><option value="income">Receita</option></select></label><label>Valor (R$)<input name="amount" type="number" min="0.01" step="0.01" max="999999999999.99" required></label><label class="wide">Descrição<input name="description" minlength="2" maxlength="200" required></label><label>Vencimento / previsão<input name="due_date" type="date" required></label><label>Data de pagamento / recebimento<input name="settled_date" type="date"></label><label>Responsável<select name="owner_id" required></select></label><label>Quem pagou / recebeu<select name="payer_id" required></select></label><label>Conta<select name="account_id" required></select></label><label>Categoria<select name="category_id" required></select></label><label class="check"><input name="shared" type="checkbox"> Compartilhada pelo casal</label><label class="check"><input name="private" type="checkbox"> Particular e privada</label><label>Divisão<select name="split_mode"><option value="equal">50% para cada</option><option value="custom">Percentual personalizado</option><option value="proportional">Proporcional às receitas do mês</option></select></label><label>Parte do responsável (%)<input name="share_percent" type="number" min="0" max="100" step="0.01" value="50"></label><label class="wide">Observações<textarea name="notes" maxlength="2000"></textarea></label></div><p class="privacy-note">Sem data de liquidação, o lançamento permanece previsto/pendente e não altera o saldo. A outra parte da divisão recebe o percentual restante.</p><button class="primary" type="submit">Salvar lançamento</button></form></dialog>
-<dialog id="account-dialog"><form id="account-form"><div class="panel-title"><h2>Nova conta</h2><button type="button" data-close="account-dialog" aria-label="Fechar">✕</button></div><label>Nome da conta<input name="name" required minlength="2" maxlength="120"></label><label>Saldo inicial (R$)<input name="initial_balance" type="number" step="0.01" required value="0"></label><button class="primary">Criar conta</button></form></dialog>
-</body></html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Rita & Jean Finance</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script defer src="/static/vendor/chart.umd.js"></script>
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <section id="auth" class="auth">
+      <div class="welcome">
+        <span class="brand-icon">R&J</span>
+        <p class="eyebrow">DINHEIRO COM PROPÓSITO</p>
+        <h1>Dois sonhos.<br />Um futuro juntos.</h1>
+        <p>
+          Um espaço para cuidar das contas, dividir responsabilidades e
+          construir seus próximos passos.
+        </p>
+        <div class="welcome-foot">RITA & JEAN <span>FINANCE</span></div>
+      </div>
+      <div class="auth-panel">
+        <p class="eyebrow">BEM-VINDOS AO SEU NOVO COMEÇO</p>
+        <h2 id="auth-title">Vamos organizar a vida?</h2>
+        <p>Entre para acompanhar suas finanças.</p>
+        <form id="auth-form">
+          <div id="register-fields" hidden>
+            <label
+              >Seu nome<input
+                name="name"
+                autocomplete="name"
+                maxlength="120" /></label
+            ><label
+              >Código de convite (opcional)<input
+                name="invitation_code"
+                autocomplete="off"
+                maxlength="200"
+                placeholder="Recebido do outro integrante" /></label
+            ><label
+              >Nome do grupo familiar<input
+                name="family_name"
+                placeholder="Rita & Jean"
+                maxlength="120"
+            /></label>
+          </div>
+          <label
+            >E-mail<input
+              name="email"
+              type="email"
+              autocomplete="username"
+              required /></label
+          ><label
+            >Senha<input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              minlength="10"
+              maxlength="128"
+              required /></label
+          ><button class="primary" type="submit" id="auth-submit">
+            Entrar na minha conta →
+          </button>
+        </form>
+        <button id="toggle-auth" class="text-button">
+          Primeiro acesso? Criar meu grupo</button
+        ><button id="recover-password" class="text-button">
+          Esqueci minha senha</button
+        ><small>A senha deve ter pelo menos 10 caracteres.</small>
+      </div>
+    </section>
+    <div id="app" hidden>
+      <aside id="sidebar">
+        <a class="logo" href="/">R<span>&</span>J <small>FINANCE</small></a>
+        <p class="side-label">SEU ESPAÇO FINANCEIRO</p>
+        <nav>
+          <button data-page="dashboard" class="active">
+            ◫ <span>Visão geral</span></button
+          ><button data-page="income">↗ <span>Receitas</span></button
+          ><button data-page="expense">↙ <span>Despesas</span></button
+          ><button data-page="accounts">▣ <span>Contas bancárias</span></button
+          ><button data-page="split">⇄ <span>Divisão do casal</span></button
+          ><button data-page="settings">⚙ <span>Configurações</span></button>
+        </nav>
+        <div class="side-bottom">
+          <p>Pequenos passos.<br /><strong>Grandes conquistas.</strong></p>
+          <button id="theme">◐ Alterar tema</button
+          ><button id="logout">↪ Sair da conta</button>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <button id="menu" aria-label="Abrir menu">☰</button
+            ><span id="family-label">Seu grupo familiar</span>
+          </div>
+          <div class="profile">
+            <span id="user-name"></span><span id="avatar"></span>
+          </div>
+        </header>
+        <div class="content">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">RITA & JEAN FINANCE</p>
+              <h1 id="page-title">Sua vida financeira, em sintonia.</h1>
+              <p id="page-subtitle">
+                Cada escolha de hoje aproxima vocês do amanhã.
+              </p>
+            </div>
+            <button id="new-entry" class="primary">+ Novo lançamento</button>
+          </div>
+          <div id="filters" class="filters">
+            <label>Mês<input type="month" id="month" /></label
+            ><label
+              >Integrante<select id="filter-owner">
+                <option value="">Todos</option>
+              </select></label
+            ><label
+              >Categoria<select id="filter-category">
+                <option value="">Todas</option>
+              </select></label
+            ><label
+              >Conta<select id="filter-account">
+                <option value="">Todas</option>
+              </select></label
+            >
+          </div>
+          <section id="dashboard-page">
+            <div id="stats" class="stats"></div>
+            <div class="chart-grid">
+              <article class="panel">
+                <div class="panel-title">
+                  <h2>O equilíbrio do mês</h2>
+                  <span>Receitas × despesas</span>
+                </div>
+                <div class="chart">
+                  <canvas
+                    id="flow-chart"
+                    aria-label="Receitas e despesas do mês"
+                    role="img"
+                  ></canvas>
+                </div>
+              </article>
+              <article class="panel">
+                <div class="panel-title">
+                  <h2>Para onde vai o dinheiro?</h2>
+                  <span>Por categoria</span>
+                </div>
+                <div class="chart">
+                  <canvas
+                    id="category-chart"
+                    aria-label="Despesas por categoria"
+                    role="img"
+                  ></canvas>
+                  <p id="empty-chart" hidden>As despesas aparecerão aqui.</p>
+                </div>
+              </article>
+            </div>
+            <article class="panel">
+              <div class="panel-title">
+                <h2>Movimentações recentes</h2>
+                <button class="text-button" data-page="expense">
+                  Ver despesas →
+                </button>
+              </div>
+              <div id="recent"></div>
+            </article>
+            <p class="privacy-note" id="visibility"></p>
+          </section>
+          <section id="entries-page" hidden>
+            <article class="panel">
+              <label
+                >Pesquisar descrição<input
+                  id="search"
+                  type="search"
+                  placeholder="Ex.: supermercado"
+              /></label>
+              <div id="entry-table"></div>
+            </article>
+          </section>
+          <section id="accounts-page" hidden>
+            <div class="section-heading">
+              <h2>Suas contas</h2>
+              <button id="new-account" class="primary">
+                + Adicionar conta
+              </button>
+            </div>
+            <div id="account-list" class="stats"></div>
+            <p class="privacy-note">
+              Saldos visíveis incluem saldo inicial e lançamentos liquidados
+              acessíveis a você. Registros privados do outro integrante são
+              excluídos.
+            </p>
+          </section>
+          <section id="split-page" hidden>
+            <article class="panel">
+              <h2>Uma divisão justa para os dois</h2>
+              <p>
+                O acerto do mês considera apenas despesas compartilhadas pagas.
+                Valor positivo: a receber. Negativo: a devolver.
+              </p>
+              <div id="settlement" class="stats"></div>
+              <p>
+                As divisões podem ser iguais, personalizadas ou proporcionais às
+                receitas cadastradas no mês. O percentual é salvo no lançamento
+                e não muda automaticamente após novas receitas.
+              </p>
+            </article>
+          </section>
+          <section id="settings-page" hidden>
+            <div class="chart-grid">
+              <article class="panel">
+                <h2>Nosso grupo</h2>
+                <div id="members"></div>
+                <form id="member-form">
+                  <h3>Convidar segundo integrante</h3>
+                  <p>
+                    Cada pessoa cria sua própria conta e senha no Supabase Auth.
+                  </p>
+                  <button class="primary">Gerar convite de 48 horas</button>
+                </form>
+                <p id="invitation-result" class="privacy-note"></p>
+                <p class="privacy-note">
+                  Compartilhe o código em particular. Ele é válido uma única
+                  vez. O segundo integrante deve informá-lo no cadastro, antes
+                  do primeiro login.
+                </p>
+              </article>
+              <article class="panel">
+                <h2>Categorias</h2>
+                <form id="category-form">
+                  <label
+                    >Nome<input
+                      name="name"
+                      required
+                      minlength="2"
+                      maxlength="120" /></label
+                  ><label
+                    >Tipo<select name="kind">
+                      <option value="expense">Despesa</option>
+                      <option value="income">Receita</option>
+                    </select></label
+                  ><button class="primary">Criar categoria</button>
+                </form>
+                <div id="category-list"></div>
+              </article>
+            </div>
+          </section>
+          <footer>
+            Planejar juntos faz toda a diferença.
+            <span>MVP · v0.2 · Supabase</span>
+          </footer>
+        </div>
+      </main>
+    </div>
+    <dialog id="entry-dialog">
+      <form id="entry-form">
+        <div class="panel-title">
+          <h2 id="entry-title">Novo lançamento</h2>
+          <button type="button" data-close="entry-dialog" aria-label="Fechar">
+            ✕
+          </button>
+        </div>
+        <div class="form-grid">
+          <label
+            >Tipo<select name="kind">
+              <option value="expense">Despesa</option>
+              <option value="income">Receita</option>
+            </select></label
+          ><label
+            >Valor (R$)<input
+              name="amount"
+              type="number"
+              min="0.01"
+              step="0.01"
+              max="9999999999999.99"
+              required /></label
+          ><label class="wide"
+            >Descrição<input
+              name="description"
+              minlength="2"
+              maxlength="200"
+              required /></label
+          ><label
+            >Vencimento / previsão<input
+              name="due_date"
+              type="date"
+              required /></label
+          ><label
+            >Data de pagamento / recebimento<input
+              name="settled_date"
+              type="date" /></label
+          ><label>Responsável<select name="owner_id" required></select></label
+          ><label
+            >Quem pagou / recebeu<select
+              name="payer_id"
+              required
+            ></select></label
+          ><label>Conta<select name="account_id" required></select></label
+          ><label>Categoria<select name="category_id" required></select></label
+          ><label class="check"
+            ><input name="shared" type="checkbox" /> Compartilhada pelo
+            casal</label
+          ><label class="check"
+            ><input name="private" type="checkbox" /> Particular e
+            privada</label
+          ><label
+            >Divisão<select name="split_mode">
+              <option value="equal">50% para cada</option>
+              <option value="custom">Percentual personalizado</option>
+              <option value="proportional">
+                Proporcional às receitas do mês
+              </option>
+            </select></label
+          ><label
+            >Parte do responsável (%)<input
+              name="share_percent"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value="50" /></label
+          ><label class="wide"
+            >Observações<textarea name="notes" maxlength="2000"></textarea>
+          </label>
+        </div>
+        <div id="receipts" hidden>
+          <h3>Comprovantes privados (até 5 MB)</h3>
+          <p class="privacy-note">
+            Acesso segue a visibilidade da despesa. Aceita PDF, PNG e JPEG.
+          </p>
+          <input
+            id="receipt-file"
+            type="file"
+            accept="application/pdf,image/png,image/jpeg"
+            aria-label="Selecionar comprovante"
+          /><button id="upload-receipt" type="button">
+            Enviar comprovante
+          </button>
+          <div id="receipt-list"></div>
+        </div>
+        <p class="privacy-note">
+          Sem data de liquidação, o lançamento permanece previsto/pendente e não
+          altera o saldo. A outra parte da divisão recebe o percentual restante.
+        </p>
+        <button class="primary" type="submit">Salvar lançamento</button>
+      </form>
+    </dialog>
+    <dialog id="account-dialog">
+      <form id="account-form">
+        <div class="panel-title">
+          <h2>Nova conta</h2>
+          <button type="button" data-close="account-dialog" aria-label="Fechar">
+            ✕
+          </button>
+        </div>
+        <label
+          >Nome da conta<input
+            name="name"
+            required
+            minlength="2"
+            maxlength="120" /></label
+        ><label
+          >Saldo inicial (R$)<input
+            name="initial_balance"
+            type="number"
+            step="0.01"
+            required
+            value="0" /></label
+        ><button class="primary">Criar conta</button>
+      </form>
+    </dialog>
+    <dialog id="password-dialog">
+      <form id="password-form">
+        <h2>Definir nova senha</h2>
+        <label
+          >Nova senha<input
+            name="password"
+            type="password"
+            minlength="10"
+            maxlength="128"
+            required
+            autocomplete="new-password" /></label
+        ><button class="primary">Atualizar senha</button>
+      </form>
+    </dialog>
+  </body>
+</html>

@@ -1,7 +1,7 @@
 name: Tests
 on: [push, pull_request]
 jobs:
-  api:
+  postgres-rls:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -10,4 +10,5 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: bash scripts/setup.sh
+      - run: .venv/bin/python -m pip install -r requirements-test.txt
       - run: .venv/bin/python -m pytest -q

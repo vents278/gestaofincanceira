@@ -1,76 +1,95 @@
-# Primeiro módulo: do cadastro ao saldo do casal
+# Guia didático dos módulos Supabase
 
-## 1. O problema
+A especificação financeira original está em `ESPECIFICACAO.md`. Esta alteração substitui sua infraestrutura local por Supabase. O código completo está nos arquivos listados a seguir; não há trechos ocultos ou dependência de código gerado fora do repositório.
 
-Uma planilha pode misturar dinheiro previsto com dinheiro disponível e duplicar despesas quando uma pessoa paga pela outra. Este módulo registra a obrigação uma vez, guarda quem é responsável e quem pagou, e calcula a posição no backend.
+## 1. Identidade, cadastro e sessão
 
-## 2. Cadastro e autenticação
+**Problema:** cada integrante precisa de uma identidade segura, e o sistema não deve administrar senhas locais.
 
-Leia o código completo de `app/schemas.py`, `app/models.py`, `app/auth.py` e os endpoints `/auth` de `app/routers/api.py`.
+**Arquivos:** `app/auth.py` comunica-se com Supabase; `app/routers/auth.py` expõe os fluxos ao navegador; `app/config.py` valida configuração; `app/static/app.js` controla formulários e sessão.
 
-- **Schema** descreve a entrada: e-mail válido, senha com 10 a 128 caracteres e campos permitidos. Dados extras são rejeitados.
-- **Modelo** descreve o armazenamento: `User` referencia `Family`. `password_hash` contém uma transformação Argon2, não a senha original.
-- **Sessão SQLAlchemy** agrupa a criação do grupo, usuário e categorias; o commit confirma a unidade.
-- **JWT** contém o identificador do usuário e expiração. O segredo é lido do ambiente. A dependência `current_user` valida a assinatura e busca o usuário ativo antes do endpoint.
-- **Permissão** é verificada no servidor. Ocultar um botão não protege a API.
+O cadastro envia e-mail e senha a `/api/auth/register`. O backend encaminha ao endpoint de signup do Supabase. Nome e preferência de grupo ficam em metadados, mas não concedem privilégio. Quando há confirmação de e-mail, o frontend informa a pendência sem inventar uma sessão.
 
-O frontend, em `app/static/app.js`, envia:
+No login, Supabase fornece access token e refresh token. `session_response()` devolve somente o access token ao JavaScript e guarda o refresh em cookie HttpOnly. O navegador usa `Authorization: Bearer ...` nas requisições; `/api/auth/refresh` renova o token, inclusive após recarregar a página. JavaScript não consegue ler o cookie HttpOnly.
 
-```javascript
-fetch('/api/auth/login', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({email: 'seu-email@example.com', password: 'sua-senha'})
-});
-```
+`verify_access()` chama `/auth/v1/user`: é o Supabase que verifica o token. O UUID retornado é o único aceito para o contexto financeiro. `current_user()` obtém nome e papel do banco, não do corpo da requisição. Recuperação usa o e-mail do Supabase e uma sessão validada para atualizar a senha.
 
-A função `api()` adiciona o Bearer token nas próximas chamadas, trata erros de validação e encerra uma sessão inválida. O token fica na memória; o `localStorage` guarda somente a preferência de tema. Textos cadastrados são escapados antes de inserir HTML nas tabelas.
+**Como testar:** cadastro, confirmação, login incorreto/correto, reload, recuperação e logout. Os testes de contrato estão em `tests/test_supabase_auth.py`; a entrega real de e-mail só pode ser comprovada no projeto hospedado.
 
-**Teste manual:** criar grupo, sair, tentar senha errada, entrar com a senha correta e cadastrar o segundo integrante. **Teste automático:** `test_auth_and_group_creation` e `test_expired_token`.
+**Exercício:** explique por que enviar `role: 'admin'` em metadados não deveria conceder acesso administrativo. Localize a consulta ao vínculo no banco que impede isso.
 
-## 3. Contas e categorias
+## 2. Grupos e convites
 
-O administrador cria a conta com saldo inicial e as categorias por tipo. Leia `Account`, `Category`, os schemas de entrada e as rotas `/accounts` e `/categories`.
+**Problema:** duas pessoas devem compartilhar um grupo sem compartilhar senha ou poder se adicionar arbitrariamente ao grupo de terceiros.
 
-A conta não guarda um saldo atual que possa ficar dessincronizado: o endpoint calcula saldo inicial + receitas liquidadas − despesas liquidadas. Categoria usada no histórico não pode ser excluída; seu nome pode ser editado. Uma categoria de receita não pode ser usada numa despesa.
+**Arquivos:** `supabase/migrations/202610160002_security.sql`, `app/dependencies.py`, `/members/invitations` em `app/routers/api.py` e o formulário de configurações.
 
-**Teste manual:** criar conta com R$ 100,00, adicionar uma despesa pendente de R$ 20,00 e verificar que o saldo continua R$ 100,00. **Teste automático:** `test_pending_and_settled_balances` e `test_validation_and_category_history`.
+`bootstrap_family()` cria o perfil referenciando `auth.users`, grupo e vínculo administrativo numa transação. Alternativamente, consome um convite válido, entra como integrante e marca o código como usado. Travas de transação/linha evitam duplicar o bootstrap ou inserir um terceiro integrante simultaneamente. O banco armazena o hash do convite, não o código em claro.
 
-## 4. Lançamentos e privacidade
+A função usa `SECURITY DEFINER` porque precisa criar o primeiro vínculo antes de o usuário ser membro. Esse privilégio fica limitado: `auth.uid()` deve existir, a rotina valida o convite, e o `search_path` vazio evita substituição maliciosa de objetos. Nenhum usuário pode alterar diretamente `integrantes_grupo` pela Data API.
 
-`EntryIn` valida valores positivos com duas casas decimais, datas e classificações. `validate_entry()` verifica cada vínculo com o grupo autenticado. `visible()` aplica a privacidade tanto às listas como aos totais e saldos.
+**Como testar:** gerar convite, cadastrar segunda pessoa com ele, tentar reutilizar o código e tentar criar outro convite com o grupo cheio. Consulte também os testes SQL que tentam editar a própria role.
 
-O fluxo de salvamento é: formulário → JSON → Pydantic → validação de vínculos/permissões → lançamento + auditoria → commit → atualização da tela por Fetch. Editar utiliza PUT e mantém o identificador. Cancelar utiliza DELETE, mas só marca `cancelled=True`, preservando o registro e a auditoria.
+**Exercício:** identifique a diferença entre uma política RLS e uma restrição de integridade. Por que ambas são úteis para proteger o grupo?
 
-Uma despesa privada é vista apenas pelo responsável. O administrador não pode criar uma despesa privada em nome de outra pessoa. Os saldos apresentados a cada usuário incluem somente seus registros visíveis; o texto da interface identifica essa limitação.
+## 3. Python, PostgreSQL e RLS
 
-**Teste manual:** registrar R$ 20,00 como pago e conferir saldo R$ 80,00; editar para R$ 30,00 e conferir R$ 70,00; cancelar e conferir R$ 100,00. **Teste automático:** saldos, privacidade, permissões e isolamento em `tests/test_finance.py`.
+**Problema:** esconder botões ou filtrar apenas no JavaScript não impede uma chamada manual à API de acessar dados privados.
 
-## 5. Divisão e dashboard
+**Arquivos:** `app/database.py`, `app/models.py`, as migrações `core` e `security`, `tests/test_rls.py`.
 
-Leia `app/services/finance.py`, especialmente `money()`, `validate_entry()` e `splits()`, e o endpoint `/dashboard`.
-
-Se Rita é responsável e pagou R$ 1.000,00, com participação de 40%, a função calcula:
+O SQLAlchemy mapeia classes às tabelas; psycopg abre a conexão PostgreSQL. O evento `after_begin` executa em cada nova transação:
 
 ```python
-own = money(amount * share_percent / 100)  # R$ 400,00 atribuídos à Rita
-other = amount - own                      # R$ 600,00 atribuídos ao Jean
+connection.exec_driver_sql('SET LOCAL ROLE authenticated')
+connection.exec_driver_sql(
+    "SELECT set_config('request.jwt.claims', %s, true)",
+    (json.dumps({'sub': str(user_id), 'role': 'authenticated'}),),
+)
 ```
 
-Rita assume R$ 400,00 e recebe crédito pelos R$ 1.000,00 pagos; seu acerto líquido é +R$ 600,00. Jean tem −R$ 600,00. O gasto consolidado continua R$ 1.000,00. Esse acerto não movimenta contas automaticamente.
+A primeira instrução reduz o papel. A segunda informa a identidade já validada; `%s` é parâmetro, não interpolação de entrada em SQL. O `true` torna a configuração local à transação. Assim, `auth.uid()` nas políticas aponta para a pessoa correta e o pool não reaproveita sua identidade em outra requisição.
 
-A divisão igual força 50%. A proporcional usa a renda cadastrada para o mês de vencimento; se Rita tem R$ 2.000,00 e Jean R$ 3.000,00, a participação dela é 40%. Sem renda válida, a API retorna erro em vez de inventar proporção.
+Uma política como `private.is_member(family_id) AND (NOT private OR owner_id=auth.uid())` permite ver um registro público do grupo ou o próprio privado. A política de escrita também exige propriedade ou papel administrativo. Mesmo o administrador não lê privados de outra pessoa.
 
-O dashboard consome valores já calculados pela API. Chart.js apenas desenha os gráficos e o JavaScript formata reais; ele não decide regras financeiras. Filtrar não altera os registros.
+**Como testar:** a suíte usa PostgreSQL real e `SET LOCAL ROLE authenticated`, sem helpers da API, para tentar consultar, inserir e editar registros indevidos. Um teste adicional confirma o contexto após `commit` e troca de conexão.
 
-**Teste automático:** divisão com centavo residual, proporção 40/60 e cancelamento. Execute também o smoke test de navegador conforme o README.
+**Exercício:** remova o filtro de grupo de uma consulta em um ambiente descartável e veja por que RLS ainda bloqueia outras famílias. Nunca altere RLS em produção para fazer esse experimento.
 
-## 6. Exercícios
+## 4. Receitas, despesas e cálculos
 
-1. Crie receitas de R$ 4.000 e R$ 6.000 e preveja o acerto de uma compra compartilhada de R$ 500 paga por Jean. Compare com a tela.
-2. Cadastre uma receita futura e explique por que ela aparece nas receitas do mês, mas não aumenta o saldo.
-3. Faça login como o outro integrante e compare os totais após uma despesa privada.
-4. Leia o teste de isolamento e identifique por que trocar o `account_id` no JSON não permite acessar outro grupo.
-5. Antes de desenvolver transferências na próxima etapa, escreva o resultado esperado: dois saldos mudam, mas receitas e despesas consolidadas permanecem iguais.
+**Problema:** diferenciar previsão de dinheiro liquidado e dividir gastos sem duplicar o total.
 
-Não avance para cartões antes de manter esses testes passando. Regras novas devem continuar no backend e receber testes que detectem erros reais de dinheiro, permissão ou integridade.
+**Arquivos:** `app/schemas.py`, `app/services/finance.py`, `app/routers/api.py`, modelos `Income` e `Expense` e as tabelas `receitas`/`despesas`.
+
+O schema exige UUIDs válidos, valor positivo e no máximo duas casas decimais. O serviço verifica vínculos com o mesmo grupo e categoria do tipo certo. As FKs compostas repetem essa garantia no banco, inclusive para chamadas diretas à Data API.
+
+O saldo é derivado: saldo inicial + receitas liquidadas − despesas liquidadas. Não existe um segundo saldo acumulado sujeito a duplicação por reenvio. Editar substitui o dado considerado no cálculo; cancelar marca o registro. Triggers registram a ação na mesma transação, inclusive quando uma escrita ocorre fora do FastAPI.
+
+Para despesa de R$ 1.000 paga por Rita, com 40% para ela, `money(amount * share_percent / 100)` calcula R$ 400. Jean assume os R$ 600 restantes. Rita recebe crédito pelo total que pagou e tem R$ 600 a receber; o gasto consolidado continua R$ 1.000. Esse acerto não realiza transferência entre contas.
+
+**Frontend:** o formulário envia JSON por Fetch; o backend devolve valores decimais como strings. Chart.js só desenha e o JavaScript só formata reais. Os cálculos de saldo e divisão nunca dependem do navegador.
+
+**Como testar:** os testes financeiros cobrem pendência, liquidação, edição repetida, cancelamento, proporção 40/60, centavo residual e privacidade. Compare manualmente com o roteiro do README.
+
+**Exercício:** com rendas de R$ 4.000 e R$ 6.000, calcule o acerto de uma despesa compartilhada de R$ 500 paga por Jean. Verifique o resultado no dashboard.
+
+## 5. Comprovantes e Storage
+
+**Problema:** um comprovante pode conter dados bancários e não pode ficar em uma URL pública.
+
+**Arquivos:** `app/routers/storage.py`, tabela `anexos`, migração `202610160003_storage_realtime.sql` e seção de comprovantes no diálogo de edição.
+
+O frontend envia o corpo binário com `Content-Type` e nome do arquivo. O backend limita a 5 MB e verifica a assinatura básica PDF/PNG/JPEG. O arquivo recebe um UUID e é enviado com o JWT do usuário para `comprovantes`, um bucket privado. A política do Storage consulta a despesa e seu grupo/privacidade. O download também exige o JWT e usa disposição `attachment`.
+
+Storage HTTP e metadados PostgreSQL não compartilham uma transação distribuída. Se gravar o objeto e o banco falhar, a aplicação tenta removê-lo; uma rotina de conciliação será necessária para tratar órfãos após falhas de rede. Não existe antivírus nesta etapa.
+
+**Como testar:** `tests/test_storage.py` valida o endpoint com HTTP do Storage simulado; `test_storage_policy_matches_expense_privacy` valida a política SQL real. O teste final de upload/download no bucket hospedado ainda exige as credenciais do projeto.
+
+**Exercício:** explique por que tornar o bucket público invalidaria a expectativa de privacidade mesmo que a API continuasse protegida.
+
+## 6. Evoluir com migrações
+
+O SQL versionado é a fonte oficial do esquema. Não altere um arquivo já aplicado: crie uma nova migração. O runner verifica SHA-256 e recusa divergências. O pacote `--sql` permite executar o mesmo histórico no SQL Editor.
+
+Cartões, faturas, parcelas, metas e orçamentos já têm fundação relacional e RLS, mas suas telas e automações serão implementadas em etapas próprias. Pagamento de fatura e transferência não devem criar receita/despesa de consumo. Realtime ficará para um fluxo que realmente precise dele, com autorização de canais e proteção de dados antigos.
